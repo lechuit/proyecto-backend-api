@@ -1,0 +1,6 @@
+// Test script para verificar que el backend compile correctamente
+import { ReadingListService } from './src/services/readingList.service';
+import { ReadingListController } from './src/controllers/readingList.controller';
+import { createReadingListRoutes } from './src/routes/readingList.routes';
+
+console.log('✅ Reading Lists backend imports working correctly');

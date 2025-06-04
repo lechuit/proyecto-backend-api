@@ -1,0 +1,145 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  username    String   @unique
+  displayName String?
+  bio         String?  @db.Text
+  avatar      String?
+  isVerified  Boolean  @default(false)
+  isPrivate   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Authentication
+  password String
+  
+  // Social features
+  posts       Post[]
+  likes       Like[]
+  comments    Comment[]
+  
+  // Following system
+  following   Follow[] @relation("UserFollowing")
+  followers   Follow[] @relation("UserFollowers")
+  
+  // Book-related
+  reviews     Review[]
+
+  @@map("users")
+}
+
+model Follow {
+  id          String @id @default(cuid())
+  followerId  String
+  followingId String
+  createdAt   DateTime @default(now())
+
+  follower    User @relation("UserFollowing", fields: [followerId], references: [id], onDelete: Cascade)
+  following   User @relation("UserFollowers", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@map("follows")
+}
+
+model Post {
+  id        String   @id @default(cuid())
+  content   String   @db.Text
+  imageUrl  String?
+  authorId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  author   User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  likes    Like[]
+  comments Comment[]
+  
+  // Book reference (optional)
+  bookId   String?
+  book     Book?   @relation(fields: [bookId], references: [id])
+
+  @@map("posts")
+}
+
+model Like {
+  id     String @id @default(cuid())
+  userId String
+  postId String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, postId])
+  @@map("likes")
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String   @db.Text
+  userId    String
+  postId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@map("comments")
+}
+
+model Book {
+  id          String  @id @default(cuid())
+  googleId    String? @unique // Google Books API ID
+  title       String
+  authors     String  @db.Text // JSON array of authors
+  description String? @db.Text
+  isbn        String?
+  publisher   String?
+  publishedDate String?
+  pageCount   Int?
+  categories  String? @db.Text // JSON array of categories
+  imageUrl    String?
+  language    String  @default("es")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  posts           Post[]
+  reviews         Review[]
+
+  @@map("books")
+}
+
+
+
+model Review {
+  id        String   @id @default(cuid())
+  rating    Int      // 1-5 stars
+  content   String?  @db.Text
+  userId    String
+  bookId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, bookId])
+  @@map("reviews")
+}
+
+
+
+

@@ -1,0 +1,43 @@
+/**
+ * DTOs for Reading Progress operations
+ */
+
+import { ReadingStatus } from '@prisma/client';
+
+export { ReadingStatus };
+
+export interface CreateReadingProgressDto {
+  bookId: string;
+  status: ReadingStatus;
+  currentPage?: number;
+  totalPages?: number;
+  startDate?: Date;
+}
+
+export interface UpdateReadingProgressDto {
+  status?: ReadingStatus;
+  currentPage?: number;
+  totalPages?: number;
+  startDate?: Date;
+  finishDate?: Date;
+}
+
+export interface ReadingProgressResponse {
+  id: string;
+  userId: string;
+  bookId: string;
+  status: ReadingStatus;
+  currentPage: number;
+  totalPages?: number;
+  startDate?: string;
+  finishDate?: string;
+  createdAt: string;
+  updatedAt: string;
+  book: {
+    id: string;
+    title: string;
+    authors: string;
+    imageUrl?: string;
+    pageCount?: number;
+  };
+}

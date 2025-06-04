@@ -1,0 +1,772 @@
+import { PrismaClient, BookList, BookListItem, SystemListType, ReadingStatus } from '@prisma/client';
+import { CreateReadingListDto, UpdateReadingListDto, AddBookToListDto } from '../models/readingList.types';
+import { ReadingProgressService } from './readingProgress.service';
+
+/**
+ * Service responsible for managing reading lists
+ * Follows Single Responsibility Principle
+ */
+export class ReadingListService {
+  private prisma: PrismaClient;
+  private readingProgressService: ReadingProgressService;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+    this.readingProgressService = new ReadingProgressService(prisma);
+  }
+
+  /**
+   * Create a new reading list for a user
+   */
+  async createReadingList(userId: string, data: CreateReadingListDto): Promise<BookList> {
+    return this.prisma.bookList.create({
+      data: {
+        name: data.name,
+        description: data.description,
+        isPublic: data.isPublic ?? true,
+        userId,
+      },
+      include: {
+        items: {
+          include: {
+            book: true,
+          },
+          orderBy: {
+            order: 'asc',
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Get user's reading lists (including system lists)
+   */
+  async getUserReadingLists(userId: string): Promise<BookList[]> {
+    // Ensure system lists exist first
+    await this.ensureSystemListsExist(userId);
+
+    return this.prisma.bookList.findMany({
+      where: {
+        userId,
+      },
+      include: {
+        items: {
+          include: {
+            book: true,
+          },
+          orderBy: {
+            order: 'asc',
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatar: true,
+          },
+        },
+      },
+      orderBy: [
+        { isSystemList: 'desc' }, // System lists first
+        { createdAt: 'desc' }
+      ],
+    });
+  }
+
+  /**
+   * Get a specific reading list by ID
+   */
+  async getReadingListById(listId: string, requestingUserId?: string): Promise<BookList | null> {
+    const list = await this.prisma.bookList.findUnique({
+      where: {
+        id: listId,
+      },
+      include: {
+        items: {
+          include: {
+            book: true,
+          },
+          orderBy: {
+            order: 'asc',
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+
+    // Check visibility permissions
+    if (!list) return null;
+    if (!list.isPublic && list.userId !== requestingUserId) {
+      return null; // Private list, user not owner
+    }
+
+    return list;
+  }
+
+  /**
+   * Get public reading lists for discovery
+   */
+  async getPublicReadingLists(limit: number = 20, offset: number = 0): Promise<BookList[]> {
+    return this.prisma.bookList.findMany({
+      where: {
+        isPublic: true,
+      },
+      include: {
+        items: {
+          include: {
+            book: true,
+          },
+          orderBy: {
+            order: 'asc',
+          },
+          take: 5, // Show only first 5 books for preview
+        },
+        user: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatar: true,
+          },
+        },
+        _count: {
+          select: {
+            items: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: limit,
+      skip: offset,
+    });
+  }
+
+  /**
+   * Update reading list details
+   */
+  async updateReadingList(
+    listId: string,
+    userId: string,
+    data: UpdateReadingListDto
+  ): Promise<BookList | null> {
+    // Check ownership
+    const list = await this.prisma.bookList.findUnique({
+      where: { id: listId },
+      select: { userId: true },
+    });
+
+    if (!list || list.userId !== userId) {
+      return null; // Not found or not owner
+    }
+
+    return this.prisma.bookList.update({
+      where: {
+        id: listId,
+      },
+      data: {
+        name: data.name,
+        description: data.description,
+        isPublic: data.isPublic,
+      },
+      include: {
+        items: {
+          include: {
+            book: true,
+          },
+          orderBy: {
+            order: 'asc',
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Delete a reading list
+   */
+  async deleteReadingList(listId: string, userId: string): Promise<boolean> {
+    // Check ownership
+    const list = await this.prisma.bookList.findUnique({
+      where: { id: listId },
+      select: { userId: true },
+    });
+
+    if (!list || list.userId !== userId) {
+      return false; // Not found or not owner
+    }
+
+    await this.prisma.bookList.delete({
+      where: {
+        id: listId,
+      },
+    });
+
+    return true;
+  }
+
+  /**
+   * Add a book to a reading list
+   */
+  async addBookToList(
+    listId: string,
+    userId: string,
+    data: AddBookToListDto
+  ): Promise<BookListItem | null> {
+    // Check list ownership
+    const list = await this.prisma.bookList.findUnique({
+      where: { id: listId },
+      select: { userId: true },
+    });
+
+    if (!list || list.userId !== userId) {
+      return null; // Not found or not owner
+    }
+
+    // Check if book already exists in list
+    const existingItem = await this.prisma.bookListItem.findUnique({
+      where: {
+        bookListId_bookId: {
+          bookListId: listId,
+          bookId: data.bookId,
+        },
+      },
+    });
+
+    if (existingItem) {
+      throw new Error('Book already exists in this list');
+    }
+
+    // Get next order position
+    const lastItem = await this.prisma.bookListItem.findFirst({
+      where: { bookListId: listId },
+      orderBy: { order: 'desc' },
+      select: { order: true },
+    });
+
+    const nextOrder = (lastItem?.order ?? -1) + 1;
+
+    return this.prisma.bookListItem.create({
+      data: {
+        bookListId: listId,
+        bookId: data.bookId,
+        order: data.order ?? nextOrder,
+        notes: data.notes,
+      },
+      include: {
+        book: true,
+        bookList: {
+          select: {
+            id: true,
+            name: true,
+            userId: true,
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Remove a book from a reading list
+   */
+  async removeBookFromList(listId: string, bookId: string, userId: string): Promise<boolean> {
+    // Check list ownership
+    const list = await this.prisma.bookList.findUnique({
+      where: { id: listId },
+      select: { userId: true },
+    });
+
+    if (!list || list.userId !== userId) {
+      return false; // Not found or not owner
+    }
+
+    const deleted = await this.prisma.bookListItem.deleteMany({
+      where: {
+        bookListId: listId,
+        bookId: bookId,
+      },
+    });
+
+    return deleted.count > 0;
+  }
+
+  /**
+   * Update book order and notes in a list
+   */
+  async updateBookInList(
+    listId: string,
+    bookId: string,
+    userId: string,
+    data: { order?: number; notes?: string }
+  ): Promise<BookListItem | null> {
+    // Check list ownership
+    const list = await this.prisma.bookList.findUnique({
+      where: { id: listId },
+      select: { userId: true },
+    });
+
+    if (!list || list.userId !== userId) {
+      return null; // Not found or not owner
+    }
+
+    const item = await this.prisma.bookListItem.findUnique({
+      where: {
+        bookListId_bookId: {
+          bookListId: listId,
+          bookId: bookId,
+        },
+      },
+    });
+
+    if (!item) {
+      return null; // Item not found
+    }
+
+    return this.prisma.bookListItem.update({
+      where: {
+        id: item.id,
+      },
+      data: {
+        order: data.order,
+        notes: data.notes,
+      },
+      include: {
+        book: true,
+        bookList: {
+          select: {
+            id: true,
+            name: true,
+            userId: true,
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Reorder books in a list
+   */
+  async reorderBooksInList(
+    listId: string,
+    userId: string,
+    bookIds: string[]
+  ): Promise<BookListItem[]> {
+    // Check list ownership
+    const list = await this.prisma.bookList.findUnique({
+      where: { id: listId },
+      select: { userId: true },
+    });
+
+    if (!list || list.userId !== userId) {
+      throw new Error('List not found or access denied');
+    }
+
+    // Update orders in transaction
+    const updatedItems = await this.prisma.$transaction(async (tx) => {
+      const updates = bookIds.map((bookId, index) =>
+        tx.bookListItem.updateMany({
+          where: {
+            bookListId: listId,
+            bookId: bookId,
+          },
+          data: {
+            order: index,
+          },
+        })
+      );
+
+      await Promise.all(updates);
+
+      // Return updated items
+      return tx.bookListItem.findMany({
+        where: { bookListId: listId },
+        include: { book: true },
+        orderBy: { order: 'asc' },
+      });
+    });
+
+    return updatedItems;
+  }
+
+  /**
+   * Ensure system lists exist for a user
+   */
+  async ensureSystemListsExist(userId: string): Promise<void> {
+    const systemListsConfig = [
+      {
+        systemType: SystemListType.WANT_TO_READ,
+        name: 'Quiero Leer',
+        description: 'Libros que quiero leer en el futuro'
+      },
+      {
+        systemType: SystemListType.READING,
+        name: 'Leyendo',
+        description: 'Libros que estoy leyendo actualmente'
+      },
+      {
+        systemType: SystemListType.FINISHED,
+        name: 'Leídos',
+        description: 'Libros que ya he terminado de leer'
+      }
+    ];
+
+    for (const listConfig of systemListsConfig) {
+      try {
+        const existingList = await this.prisma.bookList.findUnique({
+          where: {
+            userId_systemType: {
+              userId,
+              systemType: listConfig.systemType
+            }
+          }
+        });
+
+        if (!existingList) {
+          await this.prisma.bookList.create({
+            data: {
+              name: listConfig.name,
+              description: listConfig.description,
+              isSystemList: true,
+              systemType: listConfig.systemType,
+              isPublic: false,
+              userId
+            }
+          });
+        }
+      } catch (error) {
+        // Fallback if unique constraint doesn't exist yet
+        const existingList = await this.prisma.bookList.findFirst({
+          where: {
+            userId,
+            systemType: listConfig.systemType,
+            isSystemList: true
+          }
+        });
+
+        if (!existingList) {
+          await this.prisma.bookList.create({
+            data: {
+              name: listConfig.name,
+              description: listConfig.description,
+              isSystemList: true,
+              systemType: listConfig.systemType,
+              isPublic: false,
+              userId
+            }
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * Get system list by type for a user
+   */
+  async getSystemList(userId: string, systemType: SystemListType): Promise<BookList | null> {
+    await this.ensureSystemListsExist(userId);
+    
+    try {
+      return await this.prisma.bookList.findUnique({
+        where: {
+          userId_systemType: {
+            userId,
+            systemType
+          }
+        },
+        include: {
+          items: {
+            include: {
+              book: true,
+            },
+            orderBy: {
+              order: 'asc',
+            },
+          },
+          user: {
+            select: {
+              id: true,
+              username: true,
+              displayName: true,
+              avatar: true,
+            },
+          },
+        },
+      });
+    } catch (error) {
+      // Fallback if unique constraint doesn't exist yet
+      return await this.prisma.bookList.findFirst({
+        where: {
+          userId,
+          systemType,
+          isSystemList: true
+        },
+        include: {
+          items: {
+            include: {
+              book: true,
+            },
+            orderBy: {
+              order: 'asc',
+            },
+          },
+          user: {
+            select: {
+              id: true,
+              username: true,
+              displayName: true,
+              avatar: true,
+            },
+          },
+        },
+      });
+    }
+  }
+
+  /**
+   * Update book page marker in a list and sync with reading progress
+   */
+  async updateBookPageMarker(
+    listId: string,
+    bookId: string,
+    userId: string,
+    currentPage: number
+  ): Promise<BookListItem | null> {
+    // Check list ownership
+    const list = await this.prisma.bookList.findUnique({
+      where: { id: listId },
+      select: { userId: true, systemType: true },
+    });
+
+    if (!list || list.userId !== userId) {
+      return null;
+    }
+
+    // Update the book in the current list
+    const updatedItem = await this.prisma.bookListItem.update({
+      where: {
+        bookListId_bookId: {
+          bookListId: listId,
+          bookId: bookId,
+        },
+      },
+      data: {
+        currentPage,
+      },
+      include: {
+        book: true,
+        bookList: true,
+      },
+    });
+
+    // If any page marker is set (including 0), ensure book is in "Reading" system list
+    // This will move it from "Want to Read" if necessary
+    if (currentPage >= 0) {
+      await this.ensureBookInReadingList(userId, bookId, currentPage);
+      
+      // Update reading progress to READING status
+      await this.readingProgressService.updateProgress(userId, bookId, {
+        status: ReadingStatus.READING,
+        currentPage,
+      });
+    }
+
+    // Check if book is completed (currentPage equals or exceeds book's page count)
+    const book = updatedItem.book;
+    if (book.pageCount && currentPage >= book.pageCount) {
+      // Auto-complete the book
+      await this.completeBook(userId, bookId);
+    }
+
+    return updatedItem;
+  }
+
+  /**
+   * Ensure a book is in the "Reading" system list
+   */
+  private async ensureBookInReadingList(userId: string, bookId: string, currentPage: number): Promise<void> {
+    console.log(`[DEBUG] ensureBookInReadingList: userId=${userId}, bookId=${bookId}, currentPage=${currentPage}`);
+    
+    const readingList = await this.getSystemList(userId, SystemListType.READING);
+    const wantToReadList = await this.getSystemList(userId, SystemListType.WANT_TO_READ);
+    
+    if (!readingList) {
+      console.log('[DEBUG] No reading list found');
+      return;
+    }
+
+    console.log(`[DEBUG] Reading list ID: ${readingList.id}`);
+    if (wantToReadList) {
+      console.log(`[DEBUG] Want to Read list ID: ${wantToReadList.id}`);
+    }
+
+    // Check if book already exists in reading list
+    const existingInReading = await this.prisma.bookListItem.findUnique({
+      where: {
+        bookListId_bookId: {
+          bookListId: readingList.id,
+          bookId: bookId,
+        },
+      },
+    });
+
+    console.log(`[DEBUG] Book exists in Reading list: ${!!existingInReading}`);
+
+    if (!existingInReading) {
+      // Check if book exists in "Want to Read" list
+      let shouldRemoveFromWantToRead = false;
+      if (wantToReadList) {
+        const existingInWantToRead = await this.prisma.bookListItem.findUnique({
+          where: {
+            bookListId_bookId: {
+              bookListId: wantToReadList.id,
+              bookId: bookId,
+            },
+          },
+        });
+        
+        console.log(`[DEBUG] Book exists in Want to Read list: ${!!existingInWantToRead}`);
+        
+        if (existingInWantToRead) {
+          shouldRemoveFromWantToRead = true;
+        }
+      }
+
+      // Add book to reading list
+      const lastItem = await this.prisma.bookListItem.findFirst({
+        where: { bookListId: readingList.id },
+        orderBy: { order: 'desc' },
+        select: { order: true },
+      });
+
+      const nextOrder = (lastItem?.order ?? -1) + 1;
+      console.log(`[DEBUG] Adding book to Reading list with order: ${nextOrder}`);
+
+      await this.prisma.bookListItem.create({
+        data: {
+          bookListId: readingList.id,
+          bookId: bookId,
+          order: nextOrder,
+          currentPage,
+        },
+      });
+
+      // Remove from "Want to Read" list if it was there
+      if (shouldRemoveFromWantToRead && wantToReadList) {
+        console.log(`[DEBUG] Removing book from Want to Read list`);
+        const deleteResult = await this.prisma.bookListItem.deleteMany({
+          where: {
+            bookListId: wantToReadList.id,
+            bookId: bookId,
+          },
+        });
+        console.log(`[DEBUG] Deleted ${deleteResult.count} items from Want to Read list`);
+      }
+    } else {
+      // Update existing item's page marker
+      console.log(`[DEBUG] Updating existing item in Reading list`);
+      await this.prisma.bookListItem.update({
+        where: { id: existingInReading.id },
+        data: { currentPage },
+      });
+    }
+    
+    console.log(`[DEBUG] ensureBookInReadingList completed`);
+  }
+
+  /**
+   * Complete a book (move to finished list)
+   */
+  async completeBook(userId: string, bookId: string): Promise<void> {
+    const finishedList = await this.getSystemList(userId, SystemListType.FINISHED);
+    const readingList = await this.getSystemList(userId, SystemListType.READING);
+    
+    if (!finishedList) return;
+
+    // Check if book already exists in finished list
+    const existingInFinished = await this.prisma.bookListItem.findUnique({
+      where: {
+        bookListId_bookId: {
+          bookListId: finishedList.id,
+          bookId: bookId,
+        },
+      },
+    });
+
+    if (!existingInFinished) {
+      // Check if book exists in "Reading" list
+      let shouldRemoveFromReading = false;
+      if (readingList) {
+        const existingInReading = await this.prisma.bookListItem.findUnique({
+          where: {
+            bookListId_bookId: {
+              bookListId: readingList.id,
+              bookId: bookId,
+            },
+          },
+        });
+        
+        if (existingInReading) {
+          shouldRemoveFromReading = true;
+        }
+      }
+
+      const lastItem = await this.prisma.bookListItem.findFirst({
+        where: { bookListId: finishedList.id },
+        orderBy: { order: 'desc' },
+        select: { order: true },
+      });
+
+      const nextOrder = (lastItem?.order ?? -1) + 1;
+
+      await this.prisma.bookListItem.create({
+        data: {
+          bookListId: finishedList.id,
+          bookId: bookId,
+          order: nextOrder,
+        },
+      });
+
+      // Remove from "Reading" list if it was there
+      if (shouldRemoveFromReading && readingList) {
+        await this.prisma.bookListItem.deleteMany({
+          where: {
+            bookListId: readingList.id,
+            bookId: bookId,
+          },
+        });
+      }
+    }
+
+    // Update reading progress to finished
+    await this.readingProgressService.updateProgress(userId, bookId, {
+      status: ReadingStatus.FINISHED,
+      finishDate: new Date(),
+    });
+  }
+}

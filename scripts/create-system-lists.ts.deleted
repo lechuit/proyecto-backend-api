@@ -1,0 +1,88 @@
+import { PrismaClient, SystemListType } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+const SYSTEM_LISTS_CONFIG = [
+  {
+    systemType: SystemListType.WANT_TO_READ,
+    name: 'Quiero Leer',
+    description: 'Libros que quiero leer en el futuro'
+  },
+  {
+    systemType: SystemListType.READING,
+    name: 'Leyendo',
+    description: 'Libros que estoy leyendo actualmente'
+  },
+  {
+    systemType: SystemListType.FINISHED,
+    name: 'Leídos',
+    description: 'Libros que ya he terminado de leer'
+  }
+];
+
+async function createSystemListsForAllUsers() {
+  try {
+    console.log('🚀 Iniciando creación de listas del sistema...');
+
+    // Obtener todos los usuarios
+    const users = await prisma.user.findMany({
+      select: { id: true, username: true }
+    });
+
+    console.log(`📋 Encontrados ${users.length} usuarios`);
+
+    for (const user of users) {
+      console.log(`\n👤 Procesando usuario: ${user.username}`);
+
+      for (const listConfig of SYSTEM_LISTS_CONFIG) {
+        // Verificar si ya existe la lista del sistema
+        const existingList = await prisma.bookList.findUnique({
+          where: {
+            userId_systemType: {
+              userId: user.id,
+              systemType: listConfig.systemType
+            }
+          }
+        });
+
+        if (existingList) {
+          console.log(`  ⚠️  Lista "${listConfig.name}" ya existe`);
+          continue;
+        }
+
+        // Crear la lista del sistema
+        const newList = await prisma.bookList.create({
+          data: {
+            name: listConfig.name,
+            description: listConfig.description,
+            isSystemList: true,
+            systemType: listConfig.systemType,
+            isPublic: false, // Las listas del sistema son privadas por defecto
+            userId: user.id
+          }
+        });
+
+        console.log(`  ✅ Creada lista "${newList.name}"`);
+      }
+    }
+
+    console.log('\n🎉 ¡Listas del sistema creadas exitosamente!');
+
+  } catch (error) {
+    console.error('❌ Error al crear listas del sistema:', error);
+    throw error;
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+// Ejecutar si se llama directamente
+if (require.main === module) {
+  createSystemListsForAllUsers()
+    .catch((error) => {
+      console.error(error);
+      process.exit(1);
+    });
+}
+
+export default createSystemListsForAllUsers;

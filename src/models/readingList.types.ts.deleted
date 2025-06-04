@@ -1,0 +1,141 @@
+/**
+ * DTOs for Reading List operations
+ * Following Data Transfer Object pattern for API validation
+ */
+
+export interface CreateReadingListDto {
+  name: string;
+  description?: string;
+  isPublic?: boolean;
+}
+
+export interface UpdateReadingListDto {
+  name?: string;
+  description?: string;
+  isPublic?: boolean;
+}
+
+export interface AddBookToListDto {
+  bookId: string;
+  order?: number;
+  notes?: string;
+  currentPage?: number; // New field for page marker
+}
+
+export interface UpdateBookInListDto {
+  order?: number;
+  notes?: string;
+  currentPage?: number; // New field for page marker
+}
+
+export interface UpdatePageMarkerDto {
+  currentPage: number;
+}
+
+export interface ReorderBooksDto {
+  bookIds: string[];
+}
+
+/**
+ * API Response types
+ */
+export interface ReadingListResponse {
+  id: string;
+  name: string;
+  description?: string;
+  isPublic: boolean;
+  isSystemList: boolean; // New field
+  systemType?: string; // New field
+  userId: string;
+  createdAt: string;
+  updatedAt: string;
+  user: {
+    id: string;
+    username: string;
+    displayName?: string;
+    avatar?: string;
+  };
+  items: BookListItemResponse[];
+  _count?: {
+    items: number;
+  };
+}
+
+export interface BookListItemResponse {
+  id: string;
+  bookListId: string;
+  bookId: string;
+  order: number;
+  notes?: string;
+  currentPage?: number; // New field for page marker
+  createdAt: string;
+  updatedAt: string;
+  book: {
+    id: string;
+    title: string;
+    authors: string;
+    description?: string;
+    imageUrl?: string;
+    isbn?: string;
+    publisher?: string;
+    publishedDate?: string;
+    pageCount?: number;
+  };
+}
+
+/**
+ * Validation schemas (for use with validation middleware)
+ */
+export const CreateReadingListSchema = {
+  name: {
+    required: true,
+    type: 'string',
+    minLength: 1,
+    maxLength: 100,
+  },
+  description: {
+    required: false,
+    type: 'string',
+    maxLength: 500,
+  },
+  isPublic: {
+    required: false,
+    type: 'boolean',
+  },
+};
+
+export const UpdateReadingListSchema = {
+  name: {
+    required: false,
+    type: 'string',
+    minLength: 1,
+    maxLength: 100,
+  },
+  description: {
+    required: false,
+    type: 'string',
+    maxLength: 500,
+  },
+  isPublic: {
+    required: false,
+    type: 'boolean',
+  },
+};
+
+export const AddBookToListSchema = {
+  bookId: {
+    required: true,
+    type: 'string',
+    format: 'cuid',
+  },
+  order: {
+    required: false,
+    type: 'number',
+    min: 0,
+  },
+  notes: {
+    required: false,
+    type: 'string',
+    maxLength: 1000,
+  },
+};
